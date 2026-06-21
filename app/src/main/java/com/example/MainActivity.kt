@@ -53,6 +53,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import android.util.Log
+
+private const val TAG = "CalculatorViewModel"
 
 // Color Palette for Cosmic Obsidian Theme
 val CosmicOnyx = Color(0xFF090A0E)
@@ -170,6 +173,9 @@ class CalculatorViewModel : ViewModel() {
             val result = num / 100.0
             tokens[tokens.lastIndex] = formatResult(result)
             _expression.value = tokens.joinToString(" ")
+        } else {
+            Log.w(TAG, "onPercentage: unable to parse '$lastToken' as a number")
+            _expression.value = "Error"
         }
     }
 
@@ -182,12 +188,16 @@ class CalculatorViewModel : ViewModel() {
         val num = lastToken.toDoubleOrNull()
         if (num != null) {
             if (num < 0) {
+                Log.w(TAG, "onSquareRoot: cannot take square root of negative number $num")
                 _expression.value = "Error"
                 return
             }
             val result = Math.sqrt(num)
             tokens[tokens.lastIndex] = formatResult(result)
             _expression.value = tokens.joinToString(" ")
+        } else {
+            Log.w(TAG, "onSquareRoot: unable to parse '$lastToken' as a number")
+            _expression.value = "Error"
         }
     }
 
@@ -202,6 +212,9 @@ class CalculatorViewModel : ViewModel() {
             val result = num * num
             tokens[tokens.lastIndex] = formatResult(result)
             _expression.value = tokens.joinToString(" ")
+        } else {
+            Log.w(TAG, "onSquare: unable to parse '$lastToken' as a number")
+            _expression.value = "Error"
         }
     }
 
@@ -295,8 +308,13 @@ class CalculatorViewModel : ViewModel() {
             
             _expression.value = formatted
         } catch (e: ArithmeticException) {
+            Log.w(TAG, "onCalculate: arithmetic error evaluating '$current'", e)
+            _expression.value = "Error"
+        } catch (e: NumberFormatException) {
+            Log.w(TAG, "onCalculate: malformed number in expression '$current'", e)
             _expression.value = "Error"
         } catch (e: Exception) {
+            Log.e(TAG, "onCalculate: unexpected error evaluating '$current'", e)
             _expression.value = "Error"
         }
     }
@@ -314,10 +332,22 @@ class CalculatorViewModel : ViewModel() {
             return try {
                 val value = evaluateTokens(cleanTokens)
                 "= " + formatResult(value)
+            } catch (e: ArithmeticException) {
+                Log.d(TAG, "realTimePreview: arithmetic error for '$current': ${e.message}")
+                "= Error"
+            } catch (e: NumberFormatException) {
+                Log.d(TAG, "realTimePreview: malformed number in '$current': ${e.message}")
+                "= Error"
             } catch (e: Exception) {
+                Log.w(TAG, "realTimePreview: unexpected error for '$current'", e)
                 ""
             }
         }
+
+    private fun parseOperand(token: String): Double {
+        return token.toDoubleOrNull()
+            ?: throw NumberFormatException("Invalid number: '$token'")
+    }
 
     private fun evaluateTokens(tokens: List<String>): Double {
         val cleanTokens = tokens.toMutableList()
@@ -327,14 +357,14 @@ class CalculatorViewModel : ViewModel() {
         while (i < cleanTokens.size) {
             if (cleanTokens[i] == "^") {
                 if (i > 0 && i < cleanTokens.size - 1) {
-                    val base = cleanTokens[i - 1].toDoubleOrNull() ?: 0.0
-                    val exponent = cleanTokens[i + 1].toDoubleOrNull() ?: 0.0
+                    val base = parseOperand(cleanTokens[i - 1])
+                    val exponent = parseOperand(cleanTokens[i + 1])
                     val r = Math.pow(base, exponent)
                     cleanTokens[i - 1] = r.toString()
                     cleanTokens.removeAt(i)
                     cleanTokens.removeAt(i)
                 } else {
-                    cleanTokens.removeAt(i)
+                    throw ArithmeticException("Operator '^' at invalid position $i")
                 }
             } else {
                 i++
@@ -346,8 +376,8 @@ class CalculatorViewModel : ViewModel() {
         while (i < cleanTokens.size) {
             if (cleanTokens[i] == "×" || cleanTokens[i] == "÷") {
                 if (i > 0 && i < cleanTokens.size - 1) {
-                    val left = cleanTokens[i - 1].toDoubleOrNull() ?: 0.0
-                    val right = cleanTokens[i + 1].toDoubleOrNull() ?: 0.0
+                    val left = parseOperand(cleanTokens[i - 1])
+                    val right = parseOperand(cleanTokens[i + 1])
                     val r = if (cleanTokens[i] == "×") {
                         left * right
                     } else {
@@ -358,7 +388,7 @@ class CalculatorViewModel : ViewModel() {
                     cleanTokens.removeAt(i)
                     cleanTokens.removeAt(i)
                 } else {
-                    cleanTokens.removeAt(i)
+                    throw ArithmeticException("Operator '${cleanTokens[i]}' at invalid position $i")
                 }
             } else {
                 i++
@@ -370,8 +400,8 @@ class CalculatorViewModel : ViewModel() {
         while (i < cleanTokens.size) {
             if (cleanTokens[i] == "+" || cleanTokens[i] == "-") {
                 if (i > 0 && i < cleanTokens.size - 1) {
-                    val left = cleanTokens[i - 1].toDoubleOrNull() ?: 0.0
-                    val right = cleanTokens[i + 1].toDoubleOrNull() ?: 0.0
+                    val left = parseOperand(cleanTokens[i - 1])
+                    val right = parseOperand(cleanTokens[i + 1])
                     val r = if (cleanTokens[i] == "+") {
                         left + right
                     } else {
@@ -382,26 +412,28 @@ class CalculatorViewModel : ViewModel() {
                     cleanTokens.removeAt(i)
                 } else if (i == 0 && cleanTokens[i] == "-") {
                     if (cleanTokens.size > 1) {
-                        val next = cleanTokens[i + 1].toDoubleOrNull() ?: 0.0
+                        val next = parseOperand(cleanTokens[i + 1])
                         cleanTokens[i] = (-next).toString()
                         cleanTokens.removeAt(i + 1)
                     } else {
-                        cleanTokens.removeAt(i)
+                        throw ArithmeticException("Dangling '-' operator with no operand")
                     }
                 } else {
-                    cleanTokens.removeAt(i)
+                    throw ArithmeticException("Operator '${cleanTokens[i]}' at invalid position $i")
                 }
             } else {
                 i++
             }
         }
         
-        return cleanTokens.firstOrNull()?.toDoubleOrNull() ?: 0.0
+        val result = cleanTokens.firstOrNull()
+            ?: throw ArithmeticException("Expression evaluated to empty result")
+        return parseOperand(result)
     }
 
     private fun formatResult(value: Double): String {
         if (value.isInfinite()) return "Error"
-        if (value.isNaN()) return "NaN"
+        if (value.isNaN()) return "Error"
         
         // Integer check
         if (value % 1 == 0.0) {
