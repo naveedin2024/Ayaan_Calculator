@@ -2,7 +2,5 @@
   "name": "Ayaan Calculator",
   "description": "A beautifully styled, high-performance dark-themed calculator with real-time operations and history tracking.",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "majorCapabilities": []
 }
