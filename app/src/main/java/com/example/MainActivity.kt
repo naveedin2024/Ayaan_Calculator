@@ -162,61 +162,37 @@ class CalculatorViewModel : ViewModel() {
         _expression.value = tokens.joinToString(" ")
     }
 
-    fun onPercentage() {
+    private fun transformLastToken(callerName: String, transform: (Double) -> Double?) {
         _historyExpanded.value = false
         val current = _expression.value
         if (current.isEmpty() || current.endsWith(" ") || current == "Error") return
         val tokens = current.split(" ").toMutableList()
         val lastToken = tokens.lastOrNull() ?: ""
         val num = lastToken.toDoubleOrNull()
-        if (num != null) {
-            val result = num / 100.0
-            tokens[tokens.lastIndex] = formatResult(result)
-            _expression.value = tokens.joinToString(" ")
-        } else {
-            Log.w(TAG, "onPercentage: unable to parse '$lastToken' as a number")
+        if (num == null) {
+            Log.w(TAG, "$callerName: unable to parse '$lastToken' as a number")
             _expression.value = "Error"
+            return
         }
+        val result = transform(num)
+        if (result == null) {
+            _expression.value = "Error"
+            return
+        }
+        tokens[tokens.lastIndex] = formatResult(result)
+        _expression.value = tokens.joinToString(" ")
     }
 
-    fun onSquareRoot() {
-        _historyExpanded.value = false
-        val current = _expression.value
-        if (current.isEmpty() || current.endsWith(" ") || current == "Error") return
-        val tokens = current.split(" ").toMutableList()
-        val lastToken = tokens.lastOrNull() ?: ""
-        val num = lastToken.toDoubleOrNull()
-        if (num != null) {
-            if (num < 0) {
-                Log.w(TAG, "onSquareRoot: cannot take square root of negative number $num")
-                _expression.value = "Error"
-                return
-            }
-            val result = Math.sqrt(num)
-            tokens[tokens.lastIndex] = formatResult(result)
-            _expression.value = tokens.joinToString(" ")
-        } else {
-            Log.w(TAG, "onSquareRoot: unable to parse '$lastToken' as a number")
-            _expression.value = "Error"
-        }
+    fun onPercentage() = transformLastToken("onPercentage") { it / 100.0 }
+
+    fun onSquareRoot() = transformLastToken("onSquareRoot") { num ->
+        if (num < 0) {
+            Log.w(TAG, "onSquareRoot: cannot take square root of negative number $num")
+            null
+        } else Math.sqrt(num)
     }
 
-    fun onSquare() {
-        _historyExpanded.value = false
-        val current = _expression.value
-        if (current.isEmpty() || current.endsWith(" ") || current == "Error") return
-        val tokens = current.split(" ").toMutableList()
-        val lastToken = tokens.lastOrNull() ?: ""
-        val num = lastToken.toDoubleOrNull()
-        if (num != null) {
-            val result = num * num
-            tokens[tokens.lastIndex] = formatResult(result)
-            _expression.value = tokens.joinToString(" ")
-        } else {
-            Log.w(TAG, "onSquare: unable to parse '$lastToken' as a number")
-            _expression.value = "Error"
-        }
-    }
+    fun onSquare() = transformLastToken("onSquare") { it * it }
 
     fun onPi() {
         _historyExpanded.value = false
@@ -286,15 +262,19 @@ class CalculatorViewModel : ViewModel() {
         _showCopyFeedback.value = false
     }
 
+    private fun cleanTrailingOperators(tokens: List<String>): MutableList<String> {
+        val clean = tokens.toMutableList()
+        while (clean.isNotEmpty() && clean.last() in listOf("+", "-", "×", "÷", "^")) {
+            clean.removeAt(clean.size - 1)
+        }
+        return clean
+    }
+
     fun onCalculate() {
         val current = _expression.value
         if (current == "Error" || current.isEmpty()) return
-        val tokens = current.split(" ")
         try {
-            val cleanTokens = tokens.toMutableList()
-            while (cleanTokens.isNotEmpty() && cleanTokens.last() in listOf("+", "-", "×", "÷", "^")) {
-                cleanTokens.removeAt(cleanTokens.size - 1)
-            }
+            val cleanTokens = cleanTrailingOperators(current.split(" "))
             if (cleanTokens.isEmpty()) return
             
             val value = evaluateTokens(cleanTokens)
@@ -323,11 +303,7 @@ class CalculatorViewModel : ViewModel() {
         get() {
             val current = _expression.value.trim()
             if (current.isEmpty() || !current.contains(" ") || current == "Error") return ""
-            val tokens = current.split(" ")
-            val cleanTokens = tokens.toMutableList()
-            while (cleanTokens.isNotEmpty() && cleanTokens.last() in listOf("+", "-", "×", "÷", "^")) {
-                cleanTokens.removeAt(cleanTokens.size - 1)
-            }
+            val cleanTokens = cleanTrailingOperators(current.split(" "))
             if (cleanTokens.size <= 1) return ""
             return try {
                 val value = evaluateTokens(cleanTokens)
@@ -349,84 +325,55 @@ class CalculatorViewModel : ViewModel() {
             ?: throw NumberFormatException("Invalid number: '$token'")
     }
 
-    private fun evaluateTokens(tokens: List<String>): Double {
-        val cleanTokens = tokens.toMutableList()
-        
-        // 1. Evaluate Power "^"
+    private fun evaluateBinaryPass(
+        tokens: MutableList<String>,
+        operators: Set<String>,
+        compute: (String, Double, Double) -> Double
+    ) {
         var i = 0
-        while (i < cleanTokens.size) {
-            if (cleanTokens[i] == "^") {
-                if (i > 0 && i < cleanTokens.size - 1) {
-                    val base = parseOperand(cleanTokens[i - 1])
-                    val exponent = parseOperand(cleanTokens[i + 1])
-                    val r = Math.pow(base, exponent)
-                    cleanTokens[i - 1] = r.toString()
-                    cleanTokens.removeAt(i)
-                    cleanTokens.removeAt(i)
-                } else {
-                    throw ArithmeticException("Operator '^' at invalid position $i")
-                }
-            } else {
-                i++
-            }
-        }
-        
-        // 2. Evaluate Multiplication "×" and Division "÷"
-        i = 0
-        while (i < cleanTokens.size) {
-            if (cleanTokens[i] == "×" || cleanTokens[i] == "÷") {
-                if (i > 0 && i < cleanTokens.size - 1) {
-                    val left = parseOperand(cleanTokens[i - 1])
-                    val right = parseOperand(cleanTokens[i + 1])
-                    val r = if (cleanTokens[i] == "×") {
-                        left * right
-                    } else {
-                        if (right == 0.0) throw ArithmeticException("Division by zero")
-                        left / right
-                    }
-                    cleanTokens[i - 1] = r.toString()
-                    cleanTokens.removeAt(i)
-                    cleanTokens.removeAt(i)
-                } else {
-                    throw ArithmeticException("Operator '${cleanTokens[i]}' at invalid position $i")
-                }
-            } else {
-                i++
-            }
-        }
-        
-        // 3. Evaluate Addition "+" and Subtraction "-"
-        i = 0
-        while (i < cleanTokens.size) {
-            if (cleanTokens[i] == "+" || cleanTokens[i] == "-") {
-                if (i > 0 && i < cleanTokens.size - 1) {
-                    val left = parseOperand(cleanTokens[i - 1])
-                    val right = parseOperand(cleanTokens[i + 1])
-                    val r = if (cleanTokens[i] == "+") {
-                        left + right
-                    } else {
-                        left - right
-                    }
-                    cleanTokens[i - 1] = r.toString()
-                    cleanTokens.removeAt(i)
-                    cleanTokens.removeAt(i)
-                } else if (i == 0 && cleanTokens[i] == "-") {
-                    if (cleanTokens.size > 1) {
-                        val next = parseOperand(cleanTokens[i + 1])
-                        cleanTokens[i] = (-next).toString()
-                        cleanTokens.removeAt(i + 1)
+        while (i < tokens.size) {
+            if (tokens[i] in operators) {
+                if (i > 0 && i < tokens.size - 1) {
+                    val left = parseOperand(tokens[i - 1])
+                    val right = parseOperand(tokens[i + 1])
+                    tokens[i - 1] = compute(tokens[i], left, right).toString()
+                    tokens.removeAt(i)
+                    tokens.removeAt(i)
+                } else if (i == 0 && tokens[i] == "-") {
+                    if (tokens.size > 1) {
+                        val next = parseOperand(tokens[i + 1])
+                        tokens[i] = (-next).toString()
+                        tokens.removeAt(i + 1)
                     } else {
                         throw ArithmeticException("Dangling '-' operator with no operand")
                     }
                 } else {
-                    throw ArithmeticException("Operator '${cleanTokens[i]}' at invalid position $i")
+                    throw ArithmeticException("Operator '${tokens[i]}' at invalid position $i")
                 }
             } else {
                 i++
             }
         }
-        
-        val result = cleanTokens.firstOrNull()
+    }
+
+    private fun evaluateTokens(tokens: List<String>): Double {
+        val t = tokens.toMutableList()
+
+        evaluateBinaryPass(t, setOf("^")) { _, l, r -> Math.pow(l, r) }
+
+        evaluateBinaryPass(t, setOf("×", "÷")) { op, l, r ->
+            if (op == "×") l * r
+            else {
+                if (r == 0.0) throw ArithmeticException("Division by zero")
+                l / r
+            }
+        }
+
+        evaluateBinaryPass(t, setOf("+", "-")) { op, l, r ->
+            if (op == "+") l + r else l - r
+        }
+
+        val result = t.firstOrNull()
             ?: throw ArithmeticException("Expression evaluated to empty result")
         return parseOperand(result)
     }
@@ -701,21 +648,18 @@ fun CalculatorScreen(viewModel: CalculatorViewModel = viewModel()) {
                                 .padding(vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            ScientificButton(text = "√", isSelected = false, tag = "btn_sqrt") {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.onSquareRoot()
-                            }
-                            ScientificButton(text = "x²", isSelected = false, tag = "btn_square") {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.onSquare()
-                            }
-                            ScientificButton(text = "^", isSelected = false, tag = "btn_power") {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.onOperator("^")
-                            }
-                            ScientificButton(text = "π", isSelected = false, tag = "btn_pi") {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                viewModel.onPi()
+                            val scientificKeys = listOf(
+                                "√" to { viewModel.onSquareRoot() },
+                                "x²" to { viewModel.onSquare() },
+                                "^" to { viewModel.onOperator("^") },
+                                "π" to { viewModel.onPi() }
+                            )
+                            val scientificTags = listOf("btn_sqrt", "btn_square", "btn_power", "btn_pi")
+                            scientificKeys.forEachIndexed { idx, (label, action) ->
+                                ScientificButton(text = label, isSelected = false, tag = scientificTags[idx]) {
+                                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    action()
+                                }
                             }
                         }
                     }
@@ -919,34 +863,55 @@ fun CalculatorScreen(viewModel: CalculatorViewModel = viewModel()) {
 }
 
 @Composable
+fun PressScaleBox(
+    modifier: Modifier = Modifier,
+    pressedScale: Float = 0.88f,
+    dampingRatio: Float = Spring.DampingRatioNoBouncy,
+    stiffness: Float = Spring.StiffnessMedium,
+    label: String = "press_scale",
+    testTag: String? = null,
+    onClick: () -> Unit,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = dampingRatio, stiffness = stiffness),
+        label = label
+    )
+
+    Box(
+        modifier = modifier
+            .scale(scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
+        contentAlignment = Alignment.Center,
+        content = content
+    )
+}
+
+@Composable
 fun ScientificButton(
     text: String,
     isSelected: Boolean,
     tag: String,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMedium),
-        label = "scientific_scale"
-    )
-
-    Box(
+    PressScaleBox(
         modifier = Modifier
-            .scale(scale)
             .height(44.dp)
             .width(72.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) LightAccentCyan else CosmicSteel)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
-            .testTag(tag),
-        contentAlignment = Alignment.Center
+            .background(if (isSelected) LightAccentCyan else CosmicSteel),
+        pressedScale = 0.88f,
+        label = "scientific_scale",
+        testTag = tag,
+        onClick = onClick
     ) {
         Text(
             text = text,
@@ -962,21 +927,9 @@ fun CalculatorKey(
     symbol: String,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.85f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "key_scale"
-    )
-
-    // Designate styling groups based on key type
     val isOperator = symbol in listOf("÷", "×", "-", "+", "=")
     val isFunction = symbol in listOf("AC", "±", "%", "⌫")
-    
+
     val containerColor = when {
         isOperator -> HighNeonOrange
         isFunction -> Color(0x33232A3B)
@@ -989,22 +942,17 @@ fun CalculatorKey(
         else -> HighWhite
     }
 
-    val isZeroKey = symbol == "0"
-    
-    Box(
+    PressScaleBox(
         modifier = Modifier
-            .scale(scale)
             .fillMaxSize()
             .clip(RoundedCornerShape(20.dp))
             .background(containerColor)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
-            .padding(vertical = 12.dp)
-            .testTag("btn_$symbol"),
-        contentAlignment = Alignment.Center
+            .padding(vertical = 12.dp),
+        pressedScale = 0.85f,
+        dampingRatio = Spring.DampingRatioMediumBouncy,
+        label = "key_scale",
+        testTag = "btn_$symbol",
+        onClick = onClick
     ) {
         Text(
             text = symbol,
